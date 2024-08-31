@@ -1,0 +1,11 @@
+cargo-features = ["trait_alias"]
+
+[package]
+name = "khttp"
+version = "0.1.0"
+edition = "2021"
+
+
+[dependencies]
+kparser = { git = "https://github.com/kamranrad1993/kparser.git", branch = "main" }
+mio = {version = "1.0.0", features = ['net','log','os-poll','os-ext']}
