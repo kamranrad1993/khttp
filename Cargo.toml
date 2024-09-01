@@ -1,4 +1,4 @@
-cargo-features = ["trait_alias"]
+# cargo-features = ["trait_alias"]
 
 [package]
 name = "khttp"
