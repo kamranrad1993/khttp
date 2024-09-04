@@ -1,19 +1,28 @@
+pub mod context;
+
 use std::{
+    collections::HashMap,
     error::Error,
     fmt::{Debug, Display},
-    io,
-    net::{SocketAddr, ToSocketAddrs},
+    io::{self, Read, Write},
+    net::{Shutdown, SocketAddr, ToSocketAddrs},
     os::fd::{AsFd, AsRawFd, FromRawFd, IntoRawFd, RawFd},
     result, time,
 };
 
+use context::Http2Context;
+use id_pool::IdPool;
 use mio::{
-    event::{Event, Source}, net::{TcpListener, TcpStream, UnixStream}, unix::SourceFd, Events, Interest, Poll, Token
+    event::{Event, Source},
+    net::{TcpListener, TcpStream, UnixStream},
+    unix::SourceFd,
+    Events, Interest, Poll, Registry, Token,
 };
 
 #[derive(Debug)]
 pub enum Http2Error {
     IOError(std::io::Error),
+    MaxActiveConnection,
 }
 
 impl From<std::io::Error> for Http2Error {
@@ -22,22 +31,16 @@ impl From<std::io::Error> for Http2Error {
     }
 }
 
-pub trait ListenerType = Source + AsRawFd + IntoRawFd + FromRawFd + AsFd + Debug + Sized;
+const LISTENRE_TOKEN: Token = Token(0);
 
-pub struct Http2Server<T>
-where
-    T: ListenerType,
-{
-    token: Token,
-    stream: T,
+pub struct Http2Server {
+    listener: TcpListener,
     fd: UnixStream,
+    connections: HashMap<Token, Http2Context>,
 }
 
-impl<T> Http2Server<T>
-where
-    T: ListenerType,
-{
-    pub fn from_listener(listener: T, uid: usize) -> Result<Self, Http2Error> {
+impl Http2Server {
+    pub fn from_listener(listener: TcpListener) -> Result<Self, Http2Error> {
         let name = time::SystemTime::now()
             .duration_since(time::UNIX_EPOCH)
             .unwrap()
@@ -45,23 +48,70 @@ where
             .to_string();
         let fd = mio::net::UnixStream::connect(format!("/tmp/{}", name))?;
         Ok(Self {
-            token: Token(uid),
-            stream: listener,
+            listener,
             fd: fd,
+            connections: HashMap::new(),
         })
     }
 
-    pub fn listen(&mut self)-> Result<(), Http2Error> {
+    pub fn listen(&mut self) -> Result<(), Http2Error> {
         let mut poll = Poll::new()?;
-        let fd = self.stream.as_raw_fd();
+        let fd = self.listener.as_raw_fd();
         let mut fd = SourceFd(&fd);
-        poll.registry().register(&mut fd, self.token, Interest::READABLE)?;
-        
+        poll.registry()
+            .register(&mut fd, LISTENRE_TOKEN, Interest::READABLE)?;
+
+        let mut id_pool = IdPool::new();
+
         loop {
-            let mut events =Events::with_capacity(128);
+            let mut events = Events::with_capacity(128);
             poll.poll(&mut events, None)?;
-            for event in events {
-                
+            for event in &events {
+                match event.token() {
+                    LISTENRE_TOKEN => {
+                        if event.is_readable() {
+                            let (mut connection, addr) = self.listener.accept()?;
+                            let id =
+                            match id_pool.request_id().ok_or(Http2Error::MaxActiveConnection) {
+                                Ok(id) => id,
+                                Err(e) => {
+                                    eprintln!("Max Active Connection Reached");
+                                    let _ = connection.write("Max Active Connection Reached".as_bytes());
+                                    let _ = connection.shutdown(
+                                        Shutdown::Both
+                                    );
+                                    continue;
+                                },
+                            };
+                            let token = Token(id);
+                            let mut context = Http2Context::new(connection, None);
+                            poll.registry().register(
+                                &mut context,
+                                token,
+                                Interest::READABLE | Interest::WRITABLE,
+                            )?;
+                            self.connections.insert(token, context);
+                        }
+                    }
+                    token => {
+                        let context = match self.connections.get_mut(&token) {
+                            Some(context) => context,
+                            None => {
+                                self.connections.remove(&token);
+                                eprintln!("Now Such Context Found");
+                                continue;
+                            },
+                        };
+
+                        if event.is_readable(){
+                            
+                        }
+
+                        if event.is_writable() {
+
+                        }
+                    }
+                }
             }
         }
 
@@ -69,8 +119,8 @@ where
     }
 }
 
-impl Http2Server<TcpListener> {
-    pub fn new<A: ToSocketAddrs>(address: A, uid: usize) -> Result<Self, Http2Error> {
+impl Http2Server {
+    pub fn new<A: ToSocketAddrs>(address: A) -> Result<Self, Http2Error> {
         for sock_addr in address.to_socket_addrs()? {
             match TcpListener::bind(sock_addr) {
                 Ok(result) => {
@@ -81,9 +131,9 @@ impl Http2Server<TcpListener> {
                         .to_string();
                     let fd = mio::net::UnixStream::connect(format!("/tmp/{}", name))?;
                     return Ok(Self {
-                        token: Token(uid),
-                        stream: result,
+                        listener: result,
                         fd: fd,
+                        connections: HashMap::new(),
                     });
                 }
                 Err(e) => return Err(Http2Error::IOError(e)),
@@ -96,10 +146,7 @@ impl Http2Server<TcpListener> {
     }
 }
 
-impl<T> From<RawFd> for Http2Server<T>
-where
-    T: ListenerType,
-{
+impl From<RawFd> for Http2Server {
     fn from(value: RawFd) -> Self {
         todo!()
     }

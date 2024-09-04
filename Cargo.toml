@@ -7,5 +7,7 @@ edition = "2021"
 
 
 [dependencies]
+http = "1.1.0"
+id-pool = "0.2.2"
 kparser = { git = "https://github.com/kamranrad1993/kparser.git", branch = "main" }
 mio = {version = "1.0.0", features = ['net','log','os-poll','os-ext']}
