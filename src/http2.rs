@@ -1,4 +1,6 @@
 pub mod context;
+pub mod stream;
+pub use stream::*;
 
 use std::{
     collections::HashMap,
@@ -33,10 +35,15 @@ impl From<std::io::Error> for Http2Error {
 
 const LISTENRE_TOKEN: Token = Token(0);
 
+enum Connection{
+    context(Http2Context),
+    stream(Http2Stream)
+}
+
 pub struct Http2Server {
     listener: TcpListener,
     fd: UnixStream,
-    connections: HashMap<Token, Http2Context>,
+    connections: HashMap<Token, Connection>,
 }
 
 impl Http2Server {
@@ -70,31 +77,31 @@ impl Http2Server {
                 match event.token() {
                     LISTENRE_TOKEN => {
                         if event.is_readable() {
-                            let (mut connection, addr) = self.listener.accept()?;
+                            let (mut tcp_stream, addr) = self.listener.accept()?;
                             let id =
                             match id_pool.request_id().ok_or(Http2Error::MaxActiveConnection) {
                                 Ok(id) => id,
                                 Err(e) => {
                                     eprintln!("Max Active Connection Reached");
-                                    let _ = connection.write("Max Active Connection Reached".as_bytes());
-                                    let _ = connection.shutdown(
+                                    let _ = tcp_stream.write("Max Active Connection Reached".as_bytes());
+                                    let _ = tcp_stream.shutdown(
                                         Shutdown::Both
                                     );
                                     continue;
                                 },
                             };
                             let token = Token(id);
-                            let mut context = Http2Context::new(connection, None);
+                            let mut context = Http2Context::new(tcp_stream, None);
                             poll.registry().register(
                                 &mut context,
                                 token,
                                 Interest::READABLE | Interest::WRITABLE,
                             )?;
-                            self.connections.insert(token, context);
+                            self.connections.insert(token, Connection::context(context));
                         }
                     }
                     token => {
-                        let context = match self.connections.get_mut(&token) {
+                        let connection = match self.connections.get_mut(&token) {
                             Some(context) => context,
                             None => {
                                 self.connections.remove(&token);
@@ -102,6 +109,15 @@ impl Http2Server {
                                 continue;
                             },
                         };
+
+                        match connection {
+                            Connection::context(context) => {
+
+                            },
+                            Connection::stream(stream) => {
+                                
+                            },
+                        }
 
                         if event.is_readable(){
                             

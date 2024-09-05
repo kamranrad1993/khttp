@@ -56,7 +56,7 @@ dependencies = [
 [[package]]
 name = "kparser"
 version = "0.1.0"
-source = "git+https://github.com/kamranrad1993/kparser.git?branch=main#b7d2847f68ab916a34720ac91870e6f1cd3cd6da"
+source = "git+https://github.com/kamranrad1993/kparser.git?branch=main#9e86336d60aea53821739ea8d0cc7962343c8c2f"
 
 [[package]]
 name = "libc"
