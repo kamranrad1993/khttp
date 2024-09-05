@@ -1,4 +1,3 @@
-#![feature(trait_alias)]
 pub static mut BUFFER_SIZE: usize = 4196;
 pub mod http2;
 

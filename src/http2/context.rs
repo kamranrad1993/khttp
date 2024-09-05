@@ -7,7 +7,7 @@ use std::{
 
 use http::{request, Request, Response};
 use kparser::{
-    http2::{frame, Frame, FrameParseError, HpackContext, Len},
+    http2::{frame, Frame, FrameParseError, HpackContext, Len, SETTINGS_HEADER_TABLE_SIZE},
     u31::u31,
     Http2Pri,
 };
@@ -154,12 +154,32 @@ impl Http2Context {
         Ok((len, frame))
     }
 
-    fn handle_frame(&mut self, frame:Frame) {
+    fn handle_frame(&mut self, frame: Frame) {
+        let stream = match self.streams.get_mut(&frame.stream_id) {
+            Some(stream) => stream,
+            None => {
+                let mut stream = Http2Stream::new(frame.stream_id);
+                self.streams.insert(frame.stream_id, stream);
+                self.streams.get_mut(&frame.stream_id).unwrap()
+            }
+        };
 
-        match frame.payload{
+        match frame.payload {
             kparser::http2::Payload::Settings(settings_payload) => {
-                settings_payload.settings
-            },
+                for (id, value) in settings_payload.settings {
+                    match id {
+                        SETTINGS_HEADER_TABLE_SIZE => {
+                            // resize hpack context here
+                        },
+                        SETTINGS_ENABLE_PUSH => {},
+                        SETTINGS_MAX_CONCURRENT_STREAMS => {},
+                        SETTINGS_INITIAL_WINDOW_SIZE => {},
+                        SETTINGS_MAX_FRAME_SIZE => {},
+                        SETTINGS_MAX_HEADER_LIST_SIZE => {},
+                        _ => {},
+                    }
+                }
+            }
             kparser::http2::Payload::Data(_) => todo!(),
             kparser::http2::Payload::Headers(_) => todo!(),
             kparser::http2::Payload::Priority(_) => todo!(),
@@ -170,16 +190,5 @@ impl Http2Context {
             kparser::http2::Payload::WindowUpdate(_) => todo!(),
             kparser::http2::Payload::Continuation(_) => todo!(),
         }
-
-        // let stream =  match self.streams.get_mut(&frame.stream_id){
-        //     Some(stream) => stream,
-        //     None => {
-        //         let mut stream = Http2Stream::new(frame.stream_id);
-        //         self.streams.insert(frame.stream_id, stream);
-        //         self.streams.get_mut(&frame.stream_id).unwrap()
-        //     },
-        // };
-
-
     }
 }
