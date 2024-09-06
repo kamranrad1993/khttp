@@ -7,7 +7,10 @@ use std::{
 
 use http::{request, Request, Response};
 use kparser::{
-    http2::{frame, Frame, FrameParseError, HpackContext, Len, SETTINGS_HEADER_TABLE_SIZE},
+    http2::{
+        frame, DataPayload, Frame, FrameParseError, HpackContext, HpackError, Len,
+        SETTINGS_HEADER_TABLE_SIZE,
+    },
     u31::u31,
     Http2Pri,
 };
@@ -19,11 +22,13 @@ use super::{Http2Stream, TcpStream};
 
 pub enum ContextError {
     IOError(io::Error),
+    Header_decode_Error(HpackError),
     IncompleteStream,
     ClientDisconnected,
     NotHttp2,
     NoDataReady,
     InvalidStream,
+    MaxHeaderLenExceeded,
 }
 
 impl From<io::Error> for ContextError {
@@ -43,6 +48,12 @@ impl From<FrameParseError> for ContextError {
     }
 }
 
+impl From<HpackError> for ContextError {
+    fn from(value: HpackError) -> Self {
+        ContextError::Header_decode_Error(value)
+    }
+}
+
 pub struct Http2Context {
     handshaked: bool,
     buffer_size: usize,
@@ -50,6 +61,11 @@ pub struct Http2Context {
     hpack_context: HpackContext,
     streams: HashMap<u31, Http2Stream>,
     read_buffer: Vec<u8>,
+    enable_push: bool,
+    max_streams: u32,
+    nax_window_size: u128,
+    max_frame_size: u32,
+    max_headers_len: u32,
 }
 
 impl Source for Http2Context {
@@ -96,10 +112,15 @@ impl Http2Context {
             connection: stream,
             streams: HashMap::new(),
             read_buffer: Vec::new(),
+            enable_push: true,
+            max_streams: 0,
+            nax_window_size: 65535,
+            max_frame_size: 16384,
+            max_headers_len: 0,
         }
     }
 
-    pub fn handle_read(&mut self) -> Result<(), ContextError> {
+    pub fn handle_read(&mut self) -> Result<Vec<u31>, ContextError> {
         let mut buffer = vec![0u8; self.buffer_size];
         match self.connection.read(&mut buffer) {
             Ok(read_size) => {
@@ -117,11 +138,11 @@ impl Http2Context {
 
                 loop {
                     if self.read_buffer.len() == 0 {
-                        return Ok(());
+                        break;
                     }
                     let (frame_size, frame) = self.read_frame(&self.read_buffer)?;
                     self.read_buffer.drain(0..frame_size);
-                    self.handle_frame(frame);
+                    self.handle_frame(frame)?;
                 }
             }
             Err(e) => match e.kind() {
@@ -146,6 +167,7 @@ impl Http2Context {
                 | _ => return Err(ContextError::IOError(e)),
             },
         }
+        return Ok(());
     }
 
     fn read_frame(&self, buf: &Vec<u8>) -> Result<(usize, Frame), ContextError> {
@@ -154,7 +176,7 @@ impl Http2Context {
         Ok((len, frame))
     }
 
-    fn handle_frame(&mut self, frame: Frame) {
+    fn handle_frame(&mut self, frame: Frame) -> Result<(), ContextError> {
         let stream = match self.streams.get_mut(&frame.stream_id) {
             Some(stream) => stream,
             None => {
@@ -169,26 +191,56 @@ impl Http2Context {
                 for (id, value) in settings_payload.settings {
                     match id {
                         SETTINGS_HEADER_TABLE_SIZE => {
-                            // resize hpack context here
-                        },
-                        SETTINGS_ENABLE_PUSH => {},
-                        SETTINGS_MAX_CONCURRENT_STREAMS => {},
-                        SETTINGS_INITIAL_WINDOW_SIZE => {},
-                        SETTINGS_MAX_FRAME_SIZE => {},
-                        SETTINGS_MAX_HEADER_LIST_SIZE => {},
-                        _ => {},
+                            self.hpack_context.resize(value);
+                        }
+                        SETTINGS_ENABLE_PUSH => {
+                            self.enable_push = value != 0;
+                        }
+                        SETTINGS_MAX_CONCURRENT_STREAMS => self.max_streams = value,
+                        SETTINGS_INITIAL_WINDOW_SIZE => {
+                            if (frame.stream_id.to_u32() == 0) {
+                                self.nax_window_size = value as u128;
+                            } else {
+                                stream.set_window_frame_size(value)
+                            }
+                        }
+                        SETTINGS_MAX_FRAME_SIZE => {
+                            self.max_frame_size = value;
+                        }
+                        SETTINGS_MAX_HEADER_LIST_SIZE => {
+                            self.max_headers_len = value;
+                        }
+                        _ => {}
                     }
                 }
             }
-            kparser::http2::Payload::Data(_) => todo!(),
-            kparser::http2::Payload::Headers(_) => todo!(),
-            kparser::http2::Payload::Priority(_) => todo!(),
-            kparser::http2::Payload::RstStream(_) => todo!(),
+            kparser::http2::Payload::Data(data_payload) => {
+                stream.write_data_payload(data_payload);
+            }
+            kparser::http2::Payload::Headers(headers_payload) => {
+                let (headers, headers_size) = headers_payload
+                    .HeaderBlockFragment
+                    .decode(&mut self.hpack_context)?;
+
+                if stream.get_headers_len() + headers_size > self.max_headers_len {
+                    return Err(ContextError::MaxHeaderLenExceeded);
+                }
+
+                stream.add_headers(headers, headers_size);
+            }
+            kparser::http2::Payload::Priority(_) => {
+                // The PRIORITY frame (type=0x02) is deprecated;
+                // https://datatracker.ietf.org/doc/html/rfc9113#name-priority
+            },
+            kparser::http2::Payload::RstStream(rst_payload) => {
+
+            },
             kparser::http2::Payload::PushPromise(_) => todo!(),
             kparser::http2::Payload::Ping(_) => todo!(),
             kparser::http2::Payload::GoAway(_) => todo!(),
             kparser::http2::Payload::WindowUpdate(_) => todo!(),
             kparser::http2::Payload::Continuation(_) => todo!(),
         }
+        Ok(())
     }
 }

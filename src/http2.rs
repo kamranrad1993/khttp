@@ -1,15 +1,10 @@
 pub mod context;
 pub mod stream;
+use kparser::u31::u31;
 pub use stream::*;
 
 use std::{
-    collections::HashMap,
-    error::Error,
-    fmt::{Debug, Display},
-    io::{self, Read, Write},
-    net::{Shutdown, SocketAddr, ToSocketAddrs},
-    os::fd::{AsFd, AsRawFd, FromRawFd, IntoRawFd, RawFd},
-    result, time,
+    collections::HashMap, error::Error, fmt::{Debug, Display}, io::{self, Read, Write}, net::{Shutdown, SocketAddr, ToSocketAddrs}, os::fd::{AsFd, AsRawFd, FromRawFd, IntoRawFd, RawFd}, rc::Weak, result, time
 };
 
 use context::Http2Context;
@@ -37,7 +32,7 @@ const LISTENRE_TOKEN: Token = Token(0);
 
 enum Connection{
     context(Http2Context),
-    stream(Http2Stream)
+    stream((u31, Weak<Http2Context>))
 }
 
 pub struct Http2Server {
@@ -91,7 +86,7 @@ impl Http2Server {
                                 },
                             };
                             let token = Token(id);
-                            let mut context = Http2Context::new(tcp_stream, None);
+                            let mut context = Http2Context::new(tcp_stream, None, None);
                             poll.registry().register(
                                 &mut context,
                                 token,
