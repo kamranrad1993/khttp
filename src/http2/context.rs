@@ -8,8 +8,8 @@ use std::{
 use http::{request, Request, Response};
 use kparser::{
     http2::{
-        frame, DataPayload, Frame, FrameParseError, HpackContext, HpackError, Len,
-        SETTINGS_HEADER_TABLE_SIZE,
+        frame, ContinuationPayloadFlag, DataPayload, DataPayloadFlag, Frame, FrameParseError,
+        HeadersPayloadFlag, HpackContext, HpackError, Len, SETTINGS_HEADER_TABLE_SIZE,
     },
     u31::u31,
     Http2Pri,
@@ -18,7 +18,7 @@ use mio::event::Source;
 
 use crate::BUFFER_SIZE;
 
-use super::{Http2Stream, TcpStream};
+use super::{Http2Stream, StreamState, TcpStream};
 
 pub enum ContextError {
     IOError(io::Error),
@@ -60,6 +60,7 @@ pub struct Http2Context {
     connection: TcpStream,
     hpack_context: HpackContext,
     streams: HashMap<u31, Http2Stream>,
+    incomplete_streams: HashMap<u31, Http2Stream>,
     read_buffer: Vec<u8>,
     enable_push: bool,
     max_streams: u32,
@@ -111,6 +112,7 @@ impl Http2Context {
             hpack_context: HpackContext::new(max_header.unwrap()),
             connection: stream,
             streams: HashMap::new(),
+            incomplete_streams: HashMap::new(),
             read_buffer: Vec::new(),
             enable_push: true,
             max_streams: 0,
@@ -120,8 +122,9 @@ impl Http2Context {
         }
     }
 
-    pub fn handle_read(&mut self) -> Result<Vec<u31>, ContextError> {
+    pub fn handle_read(&mut self, read_data_stream: bool) -> Result<Vec<Http2Stream>, ContextError> {
         let mut buffer = vec![0u8; self.buffer_size];
+        let result = Vec::new();
         match self.connection.read(&mut buffer) {
             Ok(read_size) => {
                 if read_size == 0 {
@@ -140,9 +143,10 @@ impl Http2Context {
                     if self.read_buffer.len() == 0 {
                         break;
                     }
-                    let (frame_size, frame) = self.read_frame(&self.read_buffer)?;
+                    let (mut frame_size, frame) = self.read_frame(&self.read_buffer)?;
                     self.read_buffer.drain(0..frame_size);
-                    self.handle_frame(frame)?;
+                    let stream_id = self.handle_frame(&mut frame)?;
+                    
                 }
             }
             Err(e) => match e.kind() {
@@ -176,7 +180,7 @@ impl Http2Context {
         Ok((len, frame))
     }
 
-    fn handle_frame(&mut self, frame: Frame) -> Result<(), ContextError> {
+    fn handle_frame(&mut self, frame: &mut Frame) -> Result<u31, ContextError> {
         let stream = match self.streams.get_mut(&frame.stream_id) {
             Some(stream) => stream,
             None => {
@@ -186,61 +190,95 @@ impl Http2Context {
             }
         };
 
-        match frame.payload {
+        match &mut frame.payload {
             kparser::http2::Payload::Settings(settings_payload) => {
-                for (id, value) in settings_payload.settings {
+                for (id, value) in settings_payload.settings.iter() {
                     match id {
-                        SETTINGS_HEADER_TABLE_SIZE => {
-                            self.hpack_context.resize(value);
+                        &SETTINGS_HEADER_TABLE_SIZE => {
+                            self.hpack_context.resize(value.clone() as usize);
                         }
                         SETTINGS_ENABLE_PUSH => {
-                            self.enable_push = value != 0;
+                            self.enable_push = (value.clone() != 0);
                         }
-                        SETTINGS_MAX_CONCURRENT_STREAMS => self.max_streams = value,
+                        SETTINGS_MAX_CONCURRENT_STREAMS => self.max_streams = value.clone(),
                         SETTINGS_INITIAL_WINDOW_SIZE => {
                             if (frame.stream_id.to_u32() == 0) {
-                                self.nax_window_size = value as u128;
+                                self.nax_window_size = value.clone() as u128;
                             } else {
-                                stream.set_window_frame_size(value)
+                                stream.set_window_frame_size(value.clone())
                             }
                         }
                         SETTINGS_MAX_FRAME_SIZE => {
-                            self.max_frame_size = value;
+                            self.max_frame_size = value.clone();
                         }
                         SETTINGS_MAX_HEADER_LIST_SIZE => {
-                            self.max_headers_len = value;
+                            self.max_headers_len = value.clone();
                         }
                         _ => {}
                     }
                 }
+                stream.state = StreamState::Initiate;
             }
             kparser::http2::Payload::Data(data_payload) => {
                 stream.write_data_payload(data_payload);
+                if frame.flags & DataPayloadFlag::END_STREAM == DataPayloadFlag::END_STREAM {
+                    stream.state = StreamState::Completed;
+                } else {
+                    stream.state = StreamState::FillingData;
+                }
             }
             kparser::http2::Payload::Headers(headers_payload) => {
                 let (headers, headers_size) = headers_payload
                     .HeaderBlockFragment
                     .decode(&mut self.hpack_context)?;
 
-                if stream.get_headers_len() + headers_size > self.max_headers_len {
+                if stream.get_headers_len() + headers_size as u32 > self.max_headers_len {
                     return Err(ContextError::MaxHeaderLenExceeded);
                 }
 
-                stream.add_headers(headers, headers_size);
+                stream.add_headers(headers, headers_size as u32);
+                if frame.flags & HeadersPayloadFlag::END_STREAM == HeadersPayloadFlag::END_STREAM {
+                    if frame.flags & HeadersPayloadFlag::END_HEADERS
+                        == HeadersPayloadFlag::END_HEADERS
+                    {
+                        stream.state = StreamState::Completed;
+                    } else {
+                        stream.state = StreamState::FillingHeaders;
+                    }
+                } else {
+                    stream.state = StreamState::FillingHeaders;
+                }
             }
             kparser::http2::Payload::Priority(_) => {
                 // The PRIORITY frame (type=0x02) is deprecated;
                 // https://datatracker.ietf.org/doc/html/rfc9113#name-priority
-            },
-            kparser::http2::Payload::RstStream(rst_payload) => {
-
-            },
+            }
+            kparser::http2::Payload::RstStream(rst_payload) => {}
             kparser::http2::Payload::PushPromise(_) => todo!(),
             kparser::http2::Payload::Ping(_) => todo!(),
             kparser::http2::Payload::GoAway(_) => todo!(),
-            kparser::http2::Payload::WindowUpdate(_) => todo!(),
-            kparser::http2::Payload::Continuation(_) => todo!(),
+            kparser::http2::Payload::WindowUpdate(window_update_payload) => {
+                stream.window_frame_size_increament(window_update_payload.WindowSizeIncrement);
+            }
+            kparser::http2::Payload::Continuation(continuation_payload) => {
+                let (headers, headers_size) = continuation_payload
+                    .HeaderBlockFragment
+                    .decode(&mut self.hpack_context)?;
+
+                if stream.get_headers_len() + headers_size as u32 > self.max_headers_len {
+                    return Err(ContextError::MaxHeaderLenExceeded);
+                }
+
+                stream.add_headers(headers, headers_size as u32);
+                if frame.flags & ContinuationPayloadFlag::END_HEADERS
+                    == ContinuationPayloadFlag::END_HEADERS
+                {
+                    stream.state = StreamState::Completed;
+                } else {
+                    stream.state = StreamState::FillingHeaders;
+                }
+            }
         }
-        Ok(())
+        Ok(stream.stream_id)
     }
 }
