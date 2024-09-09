@@ -1,3 +1,4 @@
+use std::fmt::Display;
 use std::io::Write;
 use std::os::{fd::RawFd, unix::net::SocketAddr};
 use std::time;
@@ -8,19 +9,19 @@ use kparser::{
 };
 use mio::net::{TcpStream, UnixStream};
 
-pub enum StreamState{
+pub enum StreamState {
     None,
     Initiate,
     FillingHeaders,
     FillingData,
-    Completed
+    Completed,
 }
 
 pub struct Http2Stream {
     pub state: StreamState,
-    pub stream_id: u31,
+    stream_id: u31,
     max_window_frame_size: u128,
-    data_stream: Option<UnixStream>,
+    data: Option<Vec<u8>>,
     headers: Option<Vec<(Vec<u8>, Vec<u8>)>>,
     headers_len: u32,
 }
@@ -32,9 +33,13 @@ impl Http2Stream {
             stream_id: stream_id,
             max_window_frame_size: 4096,
             headers: None,
-            data_stream: None,
+            data: None,
             headers_len: 0,
         }
+    }
+
+    pub fn get_stream_id(&self) -> u31 {
+        self.stream_id
     }
 
     pub fn set_window_frame_size(&mut self, value: u32) {
@@ -45,18 +50,16 @@ impl Http2Stream {
         self.max_window_frame_size += value as u128;
     }
 
-    pub fn write_data_payload(&mut self, data: &mut DataPayload) {
-        if self.data_stream.is_none() {
-            let name = time::SystemTime::now()
-                .duration_since(time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis()
-                .to_string();
-            let stream = mio::net::UnixStream::connect(format!("/tmp/{}", name)).unwrap();
-            self.data_stream = Some(stream);
+    pub fn write_data(&mut self, data: &mut DataPayload) {
+        if self.data.is_none() {
+            self.data = Some(Vec::new());
         }
 
-        self.data_stream.as_mut().unwrap().write(&data.data);
+        self.data.as_mut().unwrap().write(&data.data);
+    }
+
+    pub fn read_data(&self) -> Option<Vec<u8>> {
+        Some(self.data.as_ref().unwrap().clone())
     }
 
     pub fn get_headers_len(&self) -> u32 {
@@ -71,18 +74,73 @@ impl Http2Stream {
         self.headers_len += size;
     }
 
-    pub fn clone(&mut self) -> Self{
-        Self{
-            state: self.state.clone(),
-            stream_id: self.stream_id,
-            max_window_frame_size: self.max_window_frame_size,
-            data_stream: Some(self.data_stream.take().unwrap()),
-            headers: Some(self.headers.take().unwrap()),
-            headers_len: self.headers_len,
+    pub fn clone(&self) -> Self {
+        match &self.data {
+            Some(data) => {
+                let result = Self {
+                    state: self.state.clone(),
+                    stream_id: self.stream_id,
+                    max_window_frame_size: self.max_window_frame_size,
+                    data: Some(data.clone()),
+                    headers: match &self.headers {
+                        Some(headers) => Some(headers.clone()),
+                        None => None,
+                    },
+                    headers_len: self.headers_len,
+                };
+                result
+            }
+            None => {
+                let result = Self {
+                    state: self.state.clone(),
+                    stream_id: self.stream_id,
+                    max_window_frame_size: self.max_window_frame_size,
+                    data: None,
+                    headers: match &self.headers {
+                        Some(headers) => Some(headers.clone()),
+                        None => None,
+                    },
+                    headers_len: self.headers_len,
+                };
+                result
+            }
+        }
+    }
+
+    pub fn clone_reset_data(&mut self) -> Self {
+        match &mut self.data {
+            Some(data) => {
+                let result = Self {
+                    state: self.state.clone(),
+                    stream_id: self.stream_id,
+                    max_window_frame_size: self.max_window_frame_size,
+                    data: Some(data.clone()),
+                    headers: match &self.headers {
+                        Some(headers) => Some(headers.clone()),
+                        None => None,
+                    },
+                    headers_len: self.headers_len,
+                };
+                self.data.as_mut().unwrap().clear();
+                result
+            }
+            None => {
+                let result = Self {
+                    state: self.state.clone(),
+                    stream_id: self.stream_id,
+                    max_window_frame_size: self.max_window_frame_size,
+                    data: None,
+                    headers: match &self.headers {
+                        Some(headers) => Some(headers.clone()),
+                        None => None,
+                    },
+                    headers_len: self.headers_len,
+                };
+                result
+            }
         }
     }
 }
-
 
 impl Clone for StreamState {
     fn clone(&self) -> Self {
@@ -93,5 +151,24 @@ impl Clone for StreamState {
             Self::FillingData => Self::FillingData,
             Self::Completed => Self::Completed,
         }
+    }
+}
+
+
+impl Display for Http2Stream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(format!("stream_id: {}", self.stream_id).as_str())?;
+        if self.headers.is_some(){
+            f.write_str("Headers:")?;
+            for (h,k) in self.headers.as_ref().unwrap(){
+                let h = std::str::from_utf8(&h).unwrap_or("Unparsable Header");
+                let k = std::str::from_utf8(&k).unwrap_or("Unparsable Header's Value");
+                f.write_str(format!("  {}:{}", h,k).as_str())?;
+            }
+        }
+        if self.data.is_some(){
+            f.write_str(format!("Data Length : {} ", self.data.as_ref().unwrap().len()).as_str())?;
+        }
+        Ok(())
     }
 }

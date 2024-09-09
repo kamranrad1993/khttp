@@ -4,7 +4,14 @@ use kparser::u31::u31;
 pub use stream::*;
 
 use std::{
-    collections::HashMap, error::Error, fmt::{Debug, Display}, io::{self, Read, Write}, net::{Shutdown, SocketAddr, ToSocketAddrs}, os::fd::{AsFd, AsRawFd, FromRawFd, IntoRawFd, RawFd}, rc::Weak, result, time
+    collections::HashMap,
+    error::Error,
+    fmt::{Debug, Display},
+    io::{self, Read, Write},
+    net::{Shutdown, SocketAddr, ToSocketAddrs},
+    os::fd::{AsFd, AsRawFd, FromRawFd, IntoRawFd, RawFd},
+    rc::Weak,
+    result, time,
 };
 
 use context::Http2Context;
@@ -30,15 +37,9 @@ impl From<std::io::Error> for Http2Error {
 
 const LISTENRE_TOKEN: Token = Token(0);
 
-enum Connection{
-    context(Http2Context),
-    stream((u31, Weak<Http2Context>))
-}
-
 pub struct Http2Server {
     listener: TcpListener,
-    fd: UnixStream,
-    connections: HashMap<Token, Connection>,
+    connections: HashMap<Token, Http2Context>,
 }
 
 impl Http2Server {
@@ -51,7 +52,6 @@ impl Http2Server {
         let fd = mio::net::UnixStream::connect(format!("/tmp/{}", name))?;
         Ok(Self {
             listener,
-            fd: fd,
             connections: HashMap::new(),
         })
     }
@@ -74,17 +74,16 @@ impl Http2Server {
                         if event.is_readable() {
                             let (mut tcp_stream, addr) = self.listener.accept()?;
                             let id =
-                            match id_pool.request_id().ok_or(Http2Error::MaxActiveConnection) {
-                                Ok(id) => id,
-                                Err(e) => {
-                                    eprintln!("Max Active Connection Reached");
-                                    let _ = tcp_stream.write("Max Active Connection Reached".as_bytes());
-                                    let _ = tcp_stream.shutdown(
-                                        Shutdown::Both
-                                    );
-                                    continue;
-                                },
-                            };
+                                match id_pool.request_id().ok_or(Http2Error::MaxActiveConnection) {
+                                    Ok(id) => id,
+                                    Err(e) => {
+                                        eprintln!("Max Active Connection Reached");
+                                        let _ = tcp_stream
+                                            .write("Max Active Connection Reached".as_bytes());
+                                        let _ = tcp_stream.shutdown(Shutdown::Both);
+                                        continue;
+                                    }
+                                };
                             let token = Token(id);
                             let mut context = Http2Context::new(tcp_stream, None, None);
                             poll.registry().register(
@@ -92,35 +91,34 @@ impl Http2Server {
                                 token,
                                 Interest::READABLE | Interest::WRITABLE,
                             )?;
-                            self.connections.insert(token, Connection::context(context));
+                            self.connections.insert(token, context);
                         }
                     }
                     token => {
-                        let connection = match self.connections.get_mut(&token) {
+                        let context = match self.connections.get_mut(&token) {
                             Some(context) => context,
                             None => {
                                 self.connections.remove(&token);
                                 eprintln!("Now Such Context Found");
                                 continue;
-                            },
+                            }
                         };
 
-                        match connection {
-                            Connection::context(context) => {
-
-                            },
-                            Connection::stream(stream) => {
-                                
-                            },
+                        if event.is_readable() {
+                            match context.handle_read(false) {
+                                Ok(streams) => {
+                                    for stream in streams {
+                                        println!("{}", stream);
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("Error : {}", e);
+                                    poll.registry().deregister(context)?;
+                                }
+                            }
                         }
 
-                        if event.is_readable(){
-                            
-                        }
-
-                        if event.is_writable() {
-
-                        }
+                        if event.is_writable() {}
                     }
                 }
             }
@@ -135,15 +133,8 @@ impl Http2Server {
         for sock_addr in address.to_socket_addrs()? {
             match TcpListener::bind(sock_addr) {
                 Ok(result) => {
-                    let name = time::SystemTime::now()
-                        .duration_since(time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_millis()
-                        .to_string();
-                    let fd = mio::net::UnixStream::connect(format!("/tmp/{}", name))?;
                     return Ok(Self {
                         listener: result,
-                        fd: fd,
                         connections: HashMap::new(),
                     });
                 }

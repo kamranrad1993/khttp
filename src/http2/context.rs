@@ -1,8 +1,5 @@
 use std::{
-    collections::HashMap,
-    io::{self, Read, Write},
-    ptr::read,
-    result,
+    cell::RefCell, collections::HashMap, fmt::Display, io::{self, Read, Write}, ptr::read, rc::Rc, result, sync::Arc
 };
 
 use http::{request, Request, Response};
@@ -18,11 +15,12 @@ use mio::event::Source;
 
 use crate::BUFFER_SIZE;
 
-use super::{Http2Stream, StreamState, TcpStream};
+use super::{stream, Http2Stream, StreamState, TcpStream};
 
+#[derive(Debug)]
 pub enum ContextError {
     IOError(io::Error),
-    Header_decode_Error(HpackError),
+    HeaderDecodeError(HpackError),
     IncompleteStream,
     ClientDisconnected,
     NotHttp2,
@@ -50,7 +48,22 @@ impl From<FrameParseError> for ContextError {
 
 impl From<HpackError> for ContextError {
     fn from(value: HpackError) -> Self {
-        ContextError::Header_decode_Error(value)
+        ContextError::HeaderDecodeError(value)
+    }
+}
+
+impl Display for ContextError{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ContextError::IOError(e) => f.write_str(format!("{}", e).as_str()),
+            ContextError::HeaderDecodeError(e) => f.write_str("Hpack Error"),
+            ContextError::IncompleteStream => f.write_str("ContextError::IncompleteStream"),
+            ContextError::ClientDisconnected => f.write_str("ContextError::ClientDisconnected"),
+            ContextError::NotHttp2 => f.write_str("ContextError::NotHttp2"),
+            ContextError::NoDataReady => f.write_str("ContextError::NoDataReady"),
+            ContextError::InvalidStream => f.write_str("ContextError::InvalidStream"),
+            ContextError::MaxHeaderLenExceeded => f.write_str("ContextError::MaxHeaderLenExceeded"),
+        }
     }
 }
 
@@ -60,7 +73,6 @@ pub struct Http2Context {
     connection: TcpStream,
     hpack_context: HpackContext,
     streams: HashMap<u31, Http2Stream>,
-    incomplete_streams: HashMap<u31, Http2Stream>,
     read_buffer: Vec<u8>,
     enable_push: bool,
     max_streams: u32,
@@ -112,7 +124,6 @@ impl Http2Context {
             hpack_context: HpackContext::new(max_header.unwrap()),
             connection: stream,
             streams: HashMap::new(),
-            incomplete_streams: HashMap::new(),
             read_buffer: Vec::new(),
             enable_push: true,
             max_streams: 0,
@@ -122,9 +133,12 @@ impl Http2Context {
         }
     }
 
-    pub fn handle_read(&mut self, read_data_stream: bool) -> Result<Vec<Http2Stream>, ContextError> {
+    pub fn handle_read(
+        &mut self,
+        read_data_stream: bool,
+    ) -> Result<Vec<Http2Stream>, ContextError> {
         let mut buffer = vec![0u8; self.buffer_size];
-        let result = Vec::new();
+        let mut result = Vec::new();
         match self.connection.read(&mut buffer) {
             Ok(read_size) => {
                 if read_size == 0 {
@@ -143,10 +157,24 @@ impl Http2Context {
                     if self.read_buffer.len() == 0 {
                         break;
                     }
-                    let (mut frame_size, frame) = self.read_frame(&self.read_buffer)?;
+                    let (mut frame_size, mut frame) = self.read_frame(&self.read_buffer)?;
                     self.read_buffer.drain(0..frame_size);
                     let stream_id = self.handle_frame(&mut frame)?;
-                    
+                    match self.streams.get_mut(&stream_id) {
+                        Some(stream) => match stream.state {
+                            StreamState::FillingData => {
+                                if read_data_stream {
+                                    result.push(stream.clone_reset_data());
+                                }
+                            }
+                            StreamState::Completed => {
+                                result.push(stream.clone());
+                                self.streams.remove(&stream_id);
+                            }
+                            _ => {}
+                        },
+                        None => {}
+                    };
                 }
             }
             Err(e) => match e.kind() {
@@ -171,7 +199,7 @@ impl Http2Context {
                 | _ => return Err(ContextError::IOError(e)),
             },
         }
-        return Ok(());
+        return Ok(result);
     }
 
     fn read_frame(&self, buf: &Vec<u8>) -> Result<(usize, Frame), ContextError> {
@@ -220,7 +248,7 @@ impl Http2Context {
                 stream.state = StreamState::Initiate;
             }
             kparser::http2::Payload::Data(data_payload) => {
-                stream.write_data_payload(data_payload);
+                stream.write_data(data_payload);
                 if frame.flags & DataPayloadFlag::END_STREAM == DataPayloadFlag::END_STREAM {
                     stream.state = StreamState::Completed;
                 } else {
@@ -258,7 +286,8 @@ impl Http2Context {
             kparser::http2::Payload::Ping(_) => todo!(),
             kparser::http2::Payload::GoAway(_) => todo!(),
             kparser::http2::Payload::WindowUpdate(window_update_payload) => {
-                stream.window_frame_size_increament(window_update_payload.WindowSizeIncrement);
+                stream
+                    .window_frame_size_increament(window_update_payload.WindowSizeIncrement);
             }
             kparser::http2::Payload::Continuation(continuation_payload) => {
                 let (headers, headers_size) = continuation_payload
@@ -279,6 +308,6 @@ impl Http2Context {
                 }
             }
         }
-        Ok(stream.stream_id)
+        Ok(stream.get_stream_id())
     }
 }
