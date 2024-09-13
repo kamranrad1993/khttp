@@ -170,6 +170,9 @@ impl Http2Context {
                             StreamState::Completed => {
                                 result.push(stream.clone());
                                 self.streams.remove(&stream_id);
+                            },
+                            StreamState::Ended =>{
+                                // self.streams.remove(stream.);
                             }
                             _ => {}
                         },
@@ -260,7 +263,7 @@ impl Http2Context {
                     .HeaderBlockFragment
                     .decode(&mut self.hpack_context)?;
 
-                if stream.get_headers_len() + headers_size as u32 > self.max_headers_len {
+                if (stream.get_headers_len() + headers_size as u32 > self.max_headers_len) && (self.max_headers_len != 0) {
                     return Err(ContextError::MaxHeaderLenExceeded);
                 }
 
@@ -284,7 +287,9 @@ impl Http2Context {
             kparser::http2::Payload::RstStream(rst_payload) => {}
             kparser::http2::Payload::PushPromise(_) => todo!(),
             kparser::http2::Payload::Ping(_) => todo!(),
-            kparser::http2::Payload::GoAway(_) => todo!(),
+            kparser::http2::Payload::GoAway(goaway_payload) => {
+               return Err(ContextError::ClientDisconnected);
+            },
             kparser::http2::Payload::WindowUpdate(window_update_payload) => {
                 stream
                     .window_frame_size_increament(window_update_payload.WindowSizeIncrement);

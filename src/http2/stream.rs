@@ -9,14 +9,17 @@ use kparser::{
 };
 use mio::net::{TcpStream, UnixStream};
 
+#[derive(Debug)]
 pub enum StreamState {
     None,
     Initiate,
     FillingHeaders,
     FillingData,
     Completed,
+    Ended
 }
 
+#[derive(Debug)]
 pub struct Http2Stream {
     pub state: StreamState,
     stream_id: u31,
@@ -150,6 +153,7 @@ impl Clone for StreamState {
             Self::FillingHeaders => Self::FillingHeaders,
             Self::FillingData => Self::FillingData,
             Self::Completed => Self::Completed,
+            Self::Ended => Self::Ended
         }
     }
 }
@@ -157,17 +161,21 @@ impl Clone for StreamState {
 
 impl Display for Http2Stream {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(format!("stream_id: {}", self.stream_id).as_str())?;
+        // f.write_str(format!("stream_id: {}", self.stream_id).as_str())?;
+        write!(f, "stream_id: {}", self.stream_id)?;
         if self.headers.is_some(){
-            f.write_str("Headers:")?;
+            // f.write_str("Headers:")?;
+            write!(f,"Headers:")?;
             for (h,k) in self.headers.as_ref().unwrap(){
                 let h = std::str::from_utf8(&h).unwrap_or("Unparsable Header");
                 let k = std::str::from_utf8(&k).unwrap_or("Unparsable Header's Value");
-                f.write_str(format!("  {}:{}", h,k).as_str())?;
+                // f.write_str(format!("  {}:{}", h,k).as_str())?;
+                write!(f,"  {}:{}", h,k)?;
             }
         }
         if self.data.is_some(){
-            f.write_str(format!("Data Length : {} ", self.data.as_ref().unwrap().len()).as_str())?;
+            // f.write_str(format!("Data Length : {} ", self.data.as_ref().unwrap().len()).as_str())?;
+            write!(f,"Data Length : {} ", self.data.as_ref().unwrap().len())?;
         }
         Ok(())
     }

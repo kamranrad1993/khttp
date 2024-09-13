@@ -108,6 +108,7 @@ impl Http2Server {
                             match context.handle_read(false) {
                                 Ok(streams) => {
                                     for stream in streams {
+                                        println!("new stream");
                                         println!("{}", stream);
                                     }
                                 }
