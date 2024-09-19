@@ -13,10 +13,10 @@ use mio::net::{TcpStream, UnixStream};
 pub enum StreamState {
     None,
     Initiate,
+    Ping,
     FillingHeaders,
     FillingData,
     Completed,
-    Ended
 }
 
 #[derive(Debug)]
@@ -27,6 +27,7 @@ pub struct Http2Stream {
     data: Option<Vec<u8>>,
     headers: Option<Vec<(Vec<u8>, Vec<u8>)>>,
     headers_len: u32,
+    pub ping_opaque: u64
 }
 
 impl Http2Stream {
@@ -38,6 +39,7 @@ impl Http2Stream {
             headers: None,
             data: None,
             headers_len: 0,
+            ping_opaque: 0
         }
     }
 
@@ -90,6 +92,7 @@ impl Http2Stream {
                         None => None,
                     },
                     headers_len: self.headers_len,
+                    ping_opaque: self.ping_opaque
                 };
                 result
             }
@@ -104,6 +107,7 @@ impl Http2Stream {
                         None => None,
                     },
                     headers_len: self.headers_len,
+                    ping_opaque: self.ping_opaque
                 };
                 result
             }
@@ -123,6 +127,7 @@ impl Http2Stream {
                         None => None,
                     },
                     headers_len: self.headers_len,
+                    ping_opaque: self.ping_opaque
                 };
                 self.data.as_mut().unwrap().clear();
                 result
@@ -138,6 +143,7 @@ impl Http2Stream {
                         None => None,
                     },
                     headers_len: self.headers_len,
+                    ping_opaque: self.ping_opaque
                 };
                 result
             }
@@ -150,10 +156,10 @@ impl Clone for StreamState {
         match self {
             Self::None => Self::None,
             Self::Initiate => Self::Initiate,
+            Self::Ping => Self::Ping,
             Self::FillingHeaders => Self::FillingHeaders,
             Self::FillingData => Self::FillingData,
             Self::Completed => Self::Completed,
-            Self::Ended => Self::Ended
         }
     }
 }
@@ -162,15 +168,15 @@ impl Clone for StreamState {
 impl Display for Http2Stream {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // f.write_str(format!("stream_id: {}", self.stream_id).as_str())?;
-        write!(f, "stream_id: {}", self.stream_id)?;
+        write!(f, "stream_id: {}\n", self.stream_id)?;
         if self.headers.is_some(){
             // f.write_str("Headers:")?;
-            write!(f,"Headers:")?;
+            write!(f,"Headers:\n")?;
             for (h,k) in self.headers.as_ref().unwrap(){
                 let h = std::str::from_utf8(&h).unwrap_or("Unparsable Header");
                 let k = std::str::from_utf8(&k).unwrap_or("Unparsable Header's Value");
                 // f.write_str(format!("  {}:{}", h,k).as_str())?;
-                write!(f,"  {}:{}", h,k)?;
+                write!(f,"  {}:{}\n", h,k)?;
             }
         }
         if self.data.is_some(){

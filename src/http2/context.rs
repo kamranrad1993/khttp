@@ -1,12 +1,18 @@
 use std::{
-    cell::RefCell, collections::HashMap, fmt::Display, io::{self, Read, Write}, ptr::read, rc::Rc, result, sync::Arc
+    cell::RefCell,
+    collections::HashMap,
+    fmt::Display,
+    io::{self, Read, Write},
+    ptr::read,
+    rc::Rc,
+    result,
+    sync::Arc,
 };
 
 use http::{request, Request, Response};
 use kparser::{
     http2::{
-        frame, ContinuationPayloadFlag, DataPayload, DataPayloadFlag, Frame, FrameParseError,
-        HeadersPayloadFlag, HpackContext, HpackError, Len, SETTINGS_HEADER_TABLE_SIZE,
+        frame, ContinuationPayloadFlag, DataPayload, DataPayloadFlag, Frame, FrameParseError, HeadersPayloadFlag, HpackContext, HpackError, Len, Payload, PingPayload, SETTINGS_HEADER_TABLE_SIZE
     },
     u31::u31,
     Http2Pri,
@@ -52,7 +58,7 @@ impl From<HpackError> for ContextError {
     }
 }
 
-impl Display for ContextError{
+impl Display for ContextError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ContextError::IOError(e) => f.write_str(format!("{}", e).as_str()),
@@ -160,24 +166,41 @@ impl Http2Context {
                     let (mut frame_size, mut frame) = self.read_frame(&self.read_buffer)?;
                     self.read_buffer.drain(0..frame_size);
                     let stream_id = self.handle_frame(&mut frame)?;
-                    match self.streams.get_mut(&stream_id) {
-                        Some(stream) => match stream.state {
-                            StreamState::FillingData => {
-                                if read_data_stream {
-                                    result.push(stream.clone_reset_data());
-                                }
+                    let stream = self.streams.get_mut(&stream_id).unwrap();
+                    match stream.state {
+                        StreamState::FillingData => {
+                            if read_data_stream {
+                                result.push(stream.clone_reset_data());
                             }
-                            StreamState::Completed => {
-                                result.push(stream.clone());
-                                self.streams.remove(&stream_id);
-                            },
-                            StreamState::Ended =>{
-                                // self.streams.remove(stream.);
-                            }
-                            _ => {}
-                        },
-                        None => {}
-                    };
+                        }
+                        StreamState::Completed => {
+                            result.push(stream.clone());
+                            self.streams.remove(&stream_id);
+                        }
+                        StreamState::Ping => {
+                            self.send_pong(stream.clone())?;
+                        }
+                        _ => {}
+                    }
+
+                    // match stream {
+                    //     Some(stream) => match stream.state {
+                    //         StreamState::FillingData => {
+                    //             if read_data_stream {
+                    //                 result.push(stream.clone_reset_data());
+                    //             }
+                    //         }
+                    //         StreamState::Completed => {
+                    //             result.push(stream.clone());
+                    //             self.streams.remove(&stream_id);
+                    //         }
+                    //         StreamState::Ping => {
+                    //             self.send_pong(stream.clone())?;
+                    //         }
+                    //         _ => {}
+                    //     },
+                    //     None => {}
+                    // };
                 }
             }
             Err(e) => match e.kind() {
@@ -263,7 +286,9 @@ impl Http2Context {
                     .HeaderBlockFragment
                     .decode(&mut self.hpack_context)?;
 
-                if (stream.get_headers_len() + headers_size as u32 > self.max_headers_len) && (self.max_headers_len != 0) {
+                if (stream.get_headers_len() + headers_size as u32 > self.max_headers_len)
+                    && (self.max_headers_len != 0)
+                {
                     return Err(ContextError::MaxHeaderLenExceeded);
                 }
 
@@ -286,13 +311,14 @@ impl Http2Context {
             }
             kparser::http2::Payload::RstStream(rst_payload) => {}
             kparser::http2::Payload::PushPromise(_) => todo!(),
-            kparser::http2::Payload::Ping(_) => todo!(),
-            kparser::http2::Payload::GoAway(goaway_payload) => {
-               return Err(ContextError::ClientDisconnected);
+            kparser::http2::Payload::Ping(ping_payload) => {
+                stream.ping_opaque = ping_payload.OpaqueData
             },
+            kparser::http2::Payload::GoAway(goaway_payload) => {
+                return Err(ContextError::ClientDisconnected);
+            }
             kparser::http2::Payload::WindowUpdate(window_update_payload) => {
-                stream
-                    .window_frame_size_increament(window_update_payload.WindowSizeIncrement);
+                stream.window_frame_size_increament(window_update_payload.WindowSizeIncrement);
             }
             kparser::http2::Payload::Continuation(continuation_payload) => {
                 let (headers, headers_size) = continuation_payload
@@ -314,5 +340,14 @@ impl Http2Context {
             }
         }
         Ok(stream.get_stream_id())
+    }
+
+    fn send_pong(&mut self, stream: Http2Stream)-> Result<(), ContextError> {
+        let pong =  PingPayload {
+            OpaqueData: stream.ping_opaque,
+        };
+        let payload = Payload::Ping(pong);
+        self.connection.write(&<Payload as Into<Vec<u8>>>::into(payload))?;
+        Ok(())
     }
 }

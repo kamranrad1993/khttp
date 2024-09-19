@@ -115,6 +115,7 @@ impl Http2Server {
                                 Err(e) => {
                                     eprintln!("Error : {}", e);
                                     poll.registry().deregister(context)?;
+                                    self.connections.remove(&token);
                                 }
                             }
                         }

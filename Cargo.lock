@@ -4,9 +4,9 @@ version = 3
 
 [[package]]
 name = "bytes"
-version = "1.7.1"
+version = "1.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8318a53db07bb3f8dca91a600466bdb3f2eaadeedfdbcf02e1accbad9271ba50"
+checksum = "428d9aa8fbc0670b7b8d6030a7fadd0f86151cae55e4dbbece15f3780a3dfaf3"
 
 [[package]]
 name = "fnv"
@@ -19,6 +19,12 @@ name = "hermit-abi"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d231dfb89cfffdbc30e7fc41579ed6066ad03abda9e567ccafae602b97ec5024"
+
+[[package]]
+name = "httlib-huffman"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a9fcbcc408c5526c3ab80d534e5c86e7967c1fb7aa0a8c76abd1edc27deb877"
 
 [[package]]
 name = "http"
@@ -56,7 +62,10 @@ dependencies = [
 [[package]]
 name = "kparser"
 version = "0.1.0"
-source = "git+https://github.com/kamranrad1993/kparser.git?branch=main#48decb6fa9ca0c59b7fbfd04ab4fd263519f98ed"
+source = "git+https://github.com/kamranrad1993/kparser.git?branch=main#d4d31413079f60272860806cc313cc6716615f77"
+dependencies = [
+ "httlib-huffman",
+]
 
 [[package]]
 name = "libc"
