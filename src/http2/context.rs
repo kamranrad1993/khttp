@@ -12,7 +12,9 @@ use std::{
 use http::{request, Request, Response};
 use kparser::{
     http2::{
-        frame, ContinuationPayloadFlag, DataPayload, DataPayloadFlag, Frame, FrameParseError, HeadersPayloadFlag, HpackContext, HpackError, Len, Payload, PingPayload, SETTINGS_HEADER_TABLE_SIZE
+        frame, hpack, ContinuationPayloadFlag, DataPayload, DataPayloadFlag, Frame,
+        FrameParseError, HeadersPayload, HeadersPayloadFlag, Hpack, HpackContext, HpackError, Len,
+        Payload, PingPayload, SETTINGS_HEADER_TABLE_SIZE,
     },
     u31::u31,
     Http2Pri,
@@ -178,7 +180,12 @@ impl Http2Context {
                             self.streams.remove(&stream_id);
                         }
                         StreamState::Ping => {
-                            self.send_pong(stream.clone())?;
+                            let pong = PingPayload {
+                                OpaqueData: stream.ping_opaque,
+                            };
+                            let payload = Payload::Ping(pong);
+                            self.connection
+                                .write(&<Payload as Into<Vec<u8>>>::into(payload))?;
                         }
                         _ => {}
                     }
@@ -313,7 +320,7 @@ impl Http2Context {
             kparser::http2::Payload::PushPromise(_) => todo!(),
             kparser::http2::Payload::Ping(ping_payload) => {
                 stream.ping_opaque = ping_payload.OpaqueData
-            },
+            }
             kparser::http2::Payload::GoAway(goaway_payload) => {
                 return Err(ContextError::ClientDisconnected);
             }
@@ -342,12 +349,34 @@ impl Http2Context {
         Ok(stream.get_stream_id())
     }
 
-    fn send_pong(&mut self, stream: Http2Stream)-> Result<(), ContextError> {
-        let pong =  PingPayload {
-            OpaqueData: stream.ping_opaque,
+    pub fn send_response(
+        &mut self,
+        stream_id: u31,
+        headers: Hpack,
+        data: Option<Vec<u8>>,
+    ) -> Result<(), ContextError> {
+        let headers_payload = HeadersPayload {
+            HeaderBlockFragment: headers,
+            PadLength: None,
+            Padding: None,
+            Priority: None,
         };
-        let payload = Payload::Ping(pong);
-        self.connection.write(&<Payload as Into<Vec<u8>>>::into(payload))?;
+        let headers_payload = Payload::Headers(headers_payload);
+        self.connection
+            .write(&<Payload as Into<Vec<u8>>>::into(headers_payload))?;
+
+        if data.is_some() {
+            let data_payload = DataPayload {
+                PadLength: None,
+                Padding: None,
+                data: data.unwrap(),
+            };
+            let data_paylaod = Payload::Data(data_payload);
+            self.connection
+                .write(&<Payload as Into<Vec<u8>>>::into(data_paylaod))?;
+        }
+
         Ok(())
     }
+
 }
