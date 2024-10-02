@@ -1,5 +1,6 @@
 pub mod context;
 pub mod stream;
+use http::{Request, Response};
 use kparser::u31::u31;
 pub use stream::*;
 
@@ -56,7 +57,7 @@ impl Http2Server {
         })
     }
 
-    pub fn listen(&mut self) -> Result<(), Http2Error> {
+    pub fn listen(&mut self, on_message: fn(Token, Request<Vec<u8>>) -> Response<Vec<u8>>) -> Result<(), Http2Error> {
         let mut poll = Poll::new()?;
         let fd = self.listener.as_raw_fd();
         let mut fd = SourceFd(&fd);

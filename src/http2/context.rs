@@ -379,4 +379,10 @@ impl Http2Context {
         Ok(())
     }
 
+    // pub fn send_http_response(&mut self, response: Response<Vec<u8>>)-> Result<(), ContextError> {
+    //     let mut hpack = Hpack::new();
+    //     let l : [(Vec<u8>, Vec<u8>)]= response.headers().iter().collect();
+    //     hpack.encode(, &mut self.hpack_context);
+    // } 
+
 }

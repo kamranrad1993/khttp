@@ -3,6 +3,7 @@ use std::io::Write;
 use std::os::{fd::RawFd, unix::net::SocketAddr};
 use std::time;
 
+use http::Request;
 use kparser::{
     http2::{DataPayload, Hpack},
     u31::u31,
@@ -184,5 +185,40 @@ impl Display for Http2Stream {
             write!(f,"Data Length : {} ", self.data.as_ref().unwrap().len())?;
         }
         Ok(())
+    }
+}
+
+
+impl Into<http::Request<Vec<u8>>> for Http2Stream {
+    fn into(self) -> http::Request<Vec<u8>> {
+        let mut builder = http::Request::builder();
+        if self.headers.is_some() {
+            for (key, value) in self.headers.unwrap() {
+                builder = builder.header(key, value);
+            }
+        }
+
+        if self.data.is_some() {
+            return builder.body(self.data.unwrap()).unwrap();
+        }
+
+        return builder.body(vec![0u8;0]).unwrap();
+    }
+}
+
+impl Into<http::Response<Vec<u8>>> for Http2Stream {
+    fn into(self) -> http::Response<Vec<u8>> {
+        let mut builder = http::Response::builder();
+        if self.headers.is_some() {
+            for (key, value) in self.headers.unwrap() {
+                builder = builder.header(key, value);
+            }
+        }
+
+        if self.data.is_some() {
+            return builder.body(self.data.unwrap()).unwrap();
+        }
+
+        return builder.body(vec![0u8;0]).unwrap();
     }
 }
