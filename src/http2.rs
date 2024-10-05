@@ -153,29 +153,3 @@ impl From<RawFd> for Http2Server {
         todo!()
     }
 }
-
-// impl<T> Source for Http2Server<T>
-// where
-//     T: ListenerType,
-// {
-//     fn register(
-//         &mut self,
-//         registry: &mio::Registry,
-//         token: mio::Token,
-//         interests: mio::Interest,
-//     ) -> io::Result<()> {
-//     }
-
-//     fn reregister(
-//         &mut self,
-//         registry: &mio::Registry,
-//         token: mio::Token,
-//         interests: mio::Interest,
-//     ) -> io::Result<()> {
-//         todo!()
-//     }
-
-//     fn deregister(&mut self, registry: &mio::Registry) -> io::Result<()> {
-//         todo!()
-//     }
-// }
