@@ -109,8 +109,7 @@ impl Http2Server {
                             match context.handle_read(false) {
                                 Ok(streams) => {
                                     for stream in streams {
-                                        println!("new stream");
-                                        println!("{}", stream);
+                                        on_message(token, stream.into());
                                     }
                                 }
                                 Err(e) => {
@@ -129,9 +128,7 @@ impl Http2Server {
 
         Ok(())
     }
-}
 
-impl Http2Server {
     pub fn new<A: ToSocketAddrs>(address: A) -> Result<Self, Http2Error> {
         for sock_addr in address.to_socket_addrs()? {
             match TcpListener::bind(sock_addr) {

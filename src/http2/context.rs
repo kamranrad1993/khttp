@@ -379,10 +379,23 @@ impl Http2Context {
         Ok(())
     }
 
-    // pub fn send_http_response(&mut self, response: Response<Vec<u8>>)-> Result<(), ContextError> {
-    //     let mut hpack = Hpack::new();
-    //     let l : [(Vec<u8>, Vec<u8>)]= response.headers().iter().collect();
-    //     hpack.encode(, &mut self.hpack_context);
-    // } 
-
+    pub fn send_http_response(
+        &mut self,
+        stream_id: u31,
+        response: Response<Vec<u8>>,
+    ) -> Result<(), ContextError> {
+        let mut hpack = Hpack::new();
+        let l: Vec<(Vec<u8>, Vec<u8>)> = response
+            .headers()
+            .iter()
+            .map(|(key, value)| {
+                // Convert HeaderValue to String for easier use
+                let key_bytes = key.as_str().as_bytes();
+                let value_bytes = value.to_str().unwrap_or_default().as_bytes();
+                (key_bytes.to_vec(), value_bytes.to_vec())
+            })
+            .collect();
+        hpack.encode(&l, &mut self.hpack_context);
+        self.send_response(stream_id, hpack, Some(response.body().to_owned()))
+    }
 }
